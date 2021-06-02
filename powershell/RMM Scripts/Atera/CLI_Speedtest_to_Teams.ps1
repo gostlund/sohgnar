@@ -34,18 +34,24 @@ $speedtestPath = $WorkingDir + "speedtest\speedtest.exe"
 $SpeedtestExecutable = Test-Path -Path $speedtestPath
 
 If ($SpeedtestExecutable){
-Write-Host "Speedtest application exists - Skipping download"
+	Write-Host "Speedtest application exists - Skipping download"
 } ELSE {
-Write-Host "Downloading Speedtest"
-$SpeedtestDestinationPath = $WorkingDir + "speedtest\"
-$ZipPath = $WorkingDir + "speedtest.zip"
-Invoke-WebRequest -UseBasicParsing -Uri "https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-win64.zip" -OutFile $ZipPath
-Expand-Archive $ZipPath -DestinationPath $SpeedtestDestinationPath -Force
-Remove-Item $ZipPath
+	Write-Host "Downloading Speedtest"
+	$SpeedtestDestinationPath = $WorkingDir + "speedtest\"
+	$ZipPath = $WorkingDir + "speedtest.zip"
+	Invoke-WebRequest -UseBasicParsing -Uri "https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-win64.zip" -OutFile $ZipPath
+	Add-Type -assembly “system.io.compression.filesystem”
+	[IO.Compression.ZipFile]::ExtractToDirectory($ZipPath,$SpeedtestDestinationPath)
+	Remove-Item $ZipPath
 }
 Write-Host "Running Speedtest"
+$SpeedtestDir = $WorkingDir + "speedtest"
 
-$SpeedtestResults = powershell $speedtestPath --accept-license --format=json --progress=no | ConvertFrom-Json
+$PreviousResults = if (test-path "$($SpeedtestDir)\LastResults.txt") { get-content "$($SpeedtestDir)\LastResults.txt" | ConvertFrom-Json }
+
+$SpeedtestResults = powershell $speedtestPath --accept-license --format=json --progress=no
+$SpeedtestResults | Out-File "$($SpeedtestDir)\LastResults.txt" -Force
+$SpeedtestResults = $SpeedtestResults | ConvertFrom-Json
 
 $speedtestResultImage = $SpeedtestResults.result.url + ".png"
 $speedtestISP = $SpeedtestResults.isp
@@ -57,16 +63,24 @@ $speedtestPL = [math]::Round($SpeedtestResults.packetLoss)
 $speedtestPing = [math]::Round($SpeedtestResults.ping.latency)
 $speedtestServer = $SpeedtestResults.server.host
 
+if ($PreviousResults) {
+	$speedtestDLmsg = "$speedtestDLspd Mbps (Previous test: " + [math]::Round($PreviousResults.download.bandwidth / 1000000 * 8, 2) + " Mbps)"
+	$speedtestULmsg = "$speedtestULspd Mbps (Previous test: " + [math]::Round($PreviousResults.upload.bandwidth / 1000000 * 8, 2) + " Mbps)"
+} else {
+	$speedtestDLmsg = "$speedtestDLspd Mbps"
+	$speedtestULmsg = "$speedtestULspd Mbps"
+}
+
 Write-Host "Sending to Results to Teams"
 
 
 $ContentType= 'application/json'
-$TeamsPayload = @"
+$slackPayload = @"
 {
 	"@type": "MessageCard",
 	"@context": "https://schema.org/extensions",
 	"summary": "Speedtest Completed",
-	"themeColor": "000000  ",
+	"themeColor": "000000",
 	"sections": [
 		{
 			"heroImage": {
@@ -77,20 +91,20 @@ $TeamsPayload = @"
 			"startGroup": true,
 			"title": "**Speedtest Completed**",
 			"activityImage": "https://github.com/librespeed/speedtest/raw/master/.logo/icon_huge.png",
-			"activityTitle": "**$hostname** - *$speedtestIntIP*",
-			"activitySubtitle": "$speedtestExtIP",
+			"activityTitle": "$speedtestIntIP - *$hostname*",
+			"activitySubtitle": "$speedtestExtIP - *$speedtestISP*",
 			"facts": [
-                {
-                    "name": "Ping:",
-                    "value": "$speedtestPing"
-                },
-                {
-					"name": "Download:",
-					"value": "$speedtestDLspd"
+				{
+					"name": "Ping:",
+					"value": "$speedtestPing ms"
 				},
-                {
+				{
+					"name": "Download:",
+					"value": "$speedtestDLmsg"
+				},
+				{
 					"name": "Upload:",
-					"value": "$speedtestULspd"
+					"value": "$speedtestULmsg"
 				},
 				{
 					"name": "Server:",
@@ -105,4 +119,5 @@ $TeamsPayload = @"
 	]
 }
 "@
-Invoke-RestMethod -uri $Webhook -Method Post -body $TeamsPayload -ContentType $ContentType
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-RestMethod -uri $Webhook -Method Post -body $slackPayload -ContentType $ContentType
