@@ -1,12 +1,12 @@
-#Speedtest CLI for PS - Post to Teams
-# By Gavin Ostlund - June 1 2021
+#Speedtest CLI for PS - Post to Teams - Updated for use with PowerAutomate flows
+# By Gavin Ostlund - June 1 2021, updated November 27, 2025
 #Based on the work of Michael Stants - June 1 2021
 
 ##############################
 # Variables you need to set  #
 ##############################
 
-# Teams Webhook URL
+# Webhook URL
 $Webhook = "WEBHOOK URL HERE"
 
 # Working Directory (with a trailing \)
@@ -39,7 +39,7 @@ Write-Host "Speedtest application exists - Skipping download"
 Write-Host "Downloading Speedtest"
 $SpeedtestDestinationPath = $WorkingDir + "speedtest\"
 $ZipPath = $WorkingDir + "speedtest.zip"
-Invoke-WebRequest -UseBasicParsing -Uri "https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-win64.zip" -OutFile $ZipPath
+Invoke-WebRequest -UseBasicParsing -Uri "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-win64.zip" -OutFile $ZipPath
 Expand-Archive $ZipPath -DestinationPath $SpeedtestDestinationPath -Force
 Remove-Item $ZipPath
 }
@@ -63,46 +63,141 @@ Write-Host "Sending to Results to Teams"
 $ContentType= 'application/json'
 $TeamsPayload = @"
 {
-	"@type": "MessageCard",
-	"@context": "https://schema.org/extensions",
-	"summary": "Speedtest Completed",
-	"themeColor": "000000  ",
-	"sections": [
-		{
-			"heroImage": {
-				"image": "$speedtestResultImage"
-			}
-		},
-		{
-			"startGroup": true,
-			"title": "**Speedtest Completed**",
-			"activityImage": "https://github.com/librespeed/speedtest/raw/master/.logo/icon_huge.png",
-			"activityTitle": "**$hostname** - *$speedtestIntIP*",
-			"activitySubtitle": "$speedtestExtIP",
-			"facts": [
-                {
-                    "name": "Ping:",
-                    "value": "$speedtestPing"
-                },
-                {
-					"name": "Download:",
-					"value": "$speedtestDLspd"
-				},
-                {
-					"name": "Upload:",
-					"value": "$speedtestULspd"
-				},
-				{
-					"name": "Server:",
-					"value": "$speedtestServer"
-				}
-			]
-		},
-		{
-			"startGroup": true,
-			"activitySubtitle": "This message was created by an automated workflow. Do not reply."
-		}
-	]
+    "hostname": "$hostname",
+    "speedtestISP": "$speedtestISP",
+    "speedtestIntIP": "$speedtestIntIP",
+    "speedtestExtIP": "$speedtestExtIP",
+    "speedtestResultImage": "$speedtestResultImage",
+    "speedtestPing": "$speedtestPing",
+    "speedtestPL": "$speedtestPL",
+    "speedtestDLspd": "$speedtestDLspd",
+    "speedtestULspd": "$speedtestULspd",
+    "speedtestServer": "$speedtestServer"
 }
 "@
+
 Invoke-RestMethod -uri $Webhook -Method Post -body $TeamsPayload -ContentType $ContentType
+
+<#
+/* Inputs to Compose in Power Automate
+ */
+
+{
+  "type": "AdaptiveCard",
+  "body": [
+    {
+      "type": "TextBlock",
+      "size": "Medium",
+      "weight": "Bolder",
+      "text": "**Speedtest Completed**"
+    },
+    {
+      "type": "ColumnSet",
+      "columns": [
+        {
+          "type": "Column",
+          "items": [
+            {
+              "type": "Image",
+              "style": "Person",
+              "url": "https://github.com/librespeed/speedtest/raw/master/.logo/icon_huge.png",
+              "altText": "Speedtest Icon",
+              "size": "Small"
+            }
+          ],
+          "width": "auto"
+        },
+        {
+          "type": "Column",
+          "items": [
+            {
+              "type": "TextBlock",
+              "weight": "Bolder",
+              "text": "**@{triggerBody()?['hostname']}** - *@{triggerBody()?['speedtestIntIP']}*",
+              "wrap": true
+            },
+            {
+              "type": "TextBlock",
+              "spacing": "None",
+              "text": "@{triggerBody()?['speedtestExtIP']} - *@{triggerBody()?['speedtestISP']}*",
+              "isSubtle": true,
+              "wrap": true
+            }
+          ],
+          "width": "stretch"
+        }
+      ]
+    },
+    {
+      "type": "Image",
+      "url": "@{triggerBody()?['speedtestResultImage']}"
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        {
+          "title": "Ping:",
+          "value": "@{triggerBody()?['speedtestPing']}"
+        },
+        {
+          "title": "Download:",
+          "value": "@{triggerBody()?['speedtestDLspd']}"
+        },
+        {
+          "title": "Upload:",
+          "value": "@{triggerBody()?['speedtestULspd']}"
+        },
+        {
+          "title": "Server:",
+          "value": "@{triggerBody()?['speedtestServer']}"
+        }
+      ],
+      "$data": "${facts}"
+    },
+    {
+      "type": "TextBlock",
+      "text": "This message was created by an automated workflow. Do not reply.",
+      "wrap": true,
+      "size": "Small"
+    }
+  ],
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.5"
+}
+
+/*
+ * Then feed to a
+ * Post card in chat or channel
+ * Post as: Flow bot
+ * Post in: Channel
+ * Team: $yourTeam
+ * Channel: $yourChannel
+ * Adaptive Card: Compose:Outputs
+ * Code View:
+
+{
+  "type": "OpenApiConnection",
+  "inputs": {
+    "parameters": {
+      "poster": "Flow bot",
+      "location": "Channel",
+      "body/recipient/groupId": "lulNo",
+      "body/recipient/channelId": "alsoNo",
+      "body/messageBody": "@outputs('Compose')"
+    },
+    "host": {
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams",
+      "connection": "shared_teams",
+      "operationId": "PostCardToConversation"
+    }
+  },
+  "runAfter": {
+    "Compose": [
+      "Succeeded"
+    ]
+  }
+}
+
+ */
+#>
+
